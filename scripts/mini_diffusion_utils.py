@@ -144,9 +144,7 @@ class mini_lms:
         integrated_coeff = integrate.quad(lms_derivative, self.sigmas[t], self.sigmas[t + 1], epsrel=1e-4)[0]
         return integrated_coeff
 
-    def step(self, model_output: torch.FloatTensor, step_index, timestep, sample: torch.FloatTensor,order: int = 4) :
-        timestep = timestep.to(self.timesteps.device)
-        #step_index = (self.timesteps == timestep).nonzero().item()
+    def step(self, model_output: torch.FloatTensor, step_index, sample: torch.FloatTensor,order: int = 4) :
         sigma = self.sigmas[step_index]
         pred_original_sample = sample - sigma * model_output
         derivative = (sample - pred_original_sample) / sigma
@@ -198,7 +196,7 @@ def prompts_to_images(prompts,negative_prompt,seed,cfg_scale,steps,width,height,
                 noise_pred = unet.forward(latent_model_input, timesteps=tt, context = text_embeddings)
             noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
             noise_pred = noise_pred_uncond + cfg_scale * (noise_pred_text - noise_pred_uncond)
-            latents = scheduler.step(noise_pred, i, t, latents)
+            latents = scheduler.step(noise_pred, i, latents)
     clock_stop = perf_counter()
     log.append('diffusion time : '+str(ceil(clock_stop*1000-clock_start*1000))+' ms')
 
