@@ -4,8 +4,8 @@
 
 This is my attempt to adapt the stable diffusion loop code from:
 
-![Stable Diffusion Deep Dive.ipynb](https://nbviewer.org/github/fastai/diffusion-nbs/blob/master/Stable%20Diffusion%20Deep%20Dive.ipynb)
+https://nbviewer.org/github/fastai/diffusion-nbs/blob/master/Stable%20Diffusion%20Deep%20Dive.ipynb
 
-![youtube](https://www.youtube.com/watch?v=0_BBRNYInx8)
+https://www.youtube.com/watch?v=0_BBRNYInx8
 
 inside webui environment, without having to install anything else. This works only for SD1.x.
