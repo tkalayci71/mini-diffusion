@@ -1,7 +1,7 @@
 #
 # https://github.com/tkalayci71/mini-diffusion
 #
-# mini_diffusion_utils version 0.2
+# mini_diffusion_utils version 0.21
 #
 
 from modules import shared
@@ -74,6 +74,8 @@ def text_list_to_embeddings(text_list):
 
 #-------------------------------------------------------------------------------
 
+import random
+
 def generate_random_latents(seed,width,height,batch_size, torch_device, data_type, generator_device = None):
     if generator_device==None: generator_device=torch_device
     generator = torch.Generator(generator_device)
@@ -125,9 +127,7 @@ class mini_lms:
         self.timesteps = torch.from_numpy(timesteps).to(device=device)
         self.derivatives = []
 
-    def scale_model_input(self, sample: torch.FloatTensor, timestep):
-        timestep = timestep.to(self.timesteps.device)
-        step_index = (self.timesteps == timestep).nonzero().item()
+    def scale_model_input(self, sample: torch.FloatTensor, step_index):
         sigma = self.sigmas[step_index]
         divval = ((sigma**2 + 1) ** 0.5)
         sample = sample / divval
@@ -171,9 +171,7 @@ def prompts_to_images(prompts,negative_prompt,seed,cfg_scale,steps,width,height,
     clock_start = perf_counter()
     unet =get_unet()
     torch_device, data_type, device_type = get_model_info(unet)
-    if randgen_device==None:
-        randgen_device = torch_device
-
+    if randgen_device==None: randgen_device = torch_device
     scheduler = mini_lms()
     positive_embeddings = text_list_to_embeddings(prompts)
     negative_embeddings = text_list_to_embeddings([negative_prompt]*batch_size)
@@ -190,7 +188,7 @@ def prompts_to_images(prompts,negative_prompt,seed,cfg_scale,steps,width,height,
             #print('step = ',i)
             latent_model_input = torch.cat([latents] * 2)
             sigma = scheduler.sigmas[i]
-            latent_model_input = scheduler.scale_model_input(latent_model_input, t)
+            latent_model_input = scheduler.scale_model_input(latent_model_input, i)
             tt = torch.tensor([t]*2*batch_size).to(device=torch_device,dtype=data_type)
             with torch.no_grad():
                 noise_pred = unet.forward(latent_model_input, timesteps=tt, context = text_embeddings)
@@ -212,4 +210,3 @@ def prompts_to_images(prompts,negative_prompt,seed,cfg_scale,steps,width,height,
     return result_images, result_text
 
 #-------------------------------------------------------------------------------
-
