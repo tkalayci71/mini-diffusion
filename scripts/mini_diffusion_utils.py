@@ -1,7 +1,7 @@
 #
 # https://github.com/tkalayci71/mini-diffusion
 #
-# mini_diffusion_utils version 0.21
+# mini_diffusion_utils version 0.3
 #
 
 from modules import shared
@@ -11,6 +11,7 @@ from scipy import integrate
 from PIL import Image
 from time import perf_counter
 from math import ceil
+from torchvision import transforms as tfms
 
 #-------------------------------------------------------------------------------
 
@@ -74,8 +75,6 @@ def text_list_to_embeddings(text_list):
 
 #-------------------------------------------------------------------------------
 
-import random
-
 def generate_random_latents(seed,width,height,batch_size, torch_device, data_type, generator_device = None):
     if generator_device==None: generator_device=torch_device
     generator = torch.Generator(generator_device)
@@ -100,60 +99,14 @@ def latents_to_pil_image(latents):
         result = [Image.fromarray(image) for image in images]
     return result
 
-#-------------------------------------------------------------------------------
-
-# simplifed version of diffusers/schedulers/scheduling_lms_discrete.py
-class mini_lms:
-    def __init__(self):
-        self.num_train_timesteps: int = 1000
-        self.beta_start: float = 0.00085
-        self.beta_end: float = 0.012
-        self.beta_schedule: str = "scaled_linear"
-        self.betas = (torch.linspace(self.beta_start**0.5, self.beta_end**0.5, self.num_train_timesteps, dtype=torch.float32) ** 2)
-        self.alphas = 1.0 - self.betas
-        self.alphas_cumprod = torch.cumprod(self.alphas, dim=0)
-        sigmas = np.array(((1 - self.alphas_cumprod) / self.alphas_cumprod) ** 0.5)
-        sigmas = np.concatenate([sigmas[::-1], [0.0]]).astype(np.float32)
-        self.sigmas = torch.from_numpy(sigmas)
-        self.init_noise_sigma = self.sigmas.max()
-
-    def set_timesteps(self, num_inference_steps: int, device):
-        self.num_inference_steps = num_inference_steps
-        timesteps = np.linspace(0, self.num_train_timesteps - 1, num_inference_steps, dtype=float)[::-1].copy()
-        sigmas = np.array(((1 - self.alphas_cumprod) / self.alphas_cumprod) ** 0.5)
-        sigmas = np.interp(timesteps, np.arange(0, len(sigmas)), sigmas)
-        sigmas = np.concatenate([sigmas, [0.0]]).astype(np.float32)
-        self.sigmas = torch.from_numpy(sigmas).to(device=device)
-        self.timesteps = torch.from_numpy(timesteps).to(device=device)
-        self.derivatives = []
-
-    def scale_model_input(self, sample: torch.FloatTensor, step_index):
-        sigma = self.sigmas[step_index]
-        divval = ((sigma**2 + 1) ** 0.5)
-        sample = sample / divval
-        return sample
-
-    def get_lms_coefficient(self, order, t, current_order):
-        def lms_derivative(tau):
-            prod = 1.0
-            for k in range(order):
-                if current_order == k:
-                    continue
-                prod *= (tau - self.sigmas[t - k]) / (self.sigmas[t - current_order] - self.sigmas[t - k])
-            return prod
-        integrated_coeff = integrate.quad(lms_derivative, self.sigmas[t], self.sigmas[t + 1], epsrel=1e-4)[0]
-        return integrated_coeff
-
-    def step(self, model_output: torch.FloatTensor, step_index, sample: torch.FloatTensor,order: int = 4) :
-        sigma = self.sigmas[step_index]
-        pred_original_sample = sample - sigma * model_output
-        derivative = (sample - pred_original_sample) / sigma
-        self.derivatives.append(derivative)
-        if len(self.derivatives) > order: self.derivatives.pop(0)
-        order = min(step_index + 1, order)
-        lms_coeffs = [self.get_lms_coefficient(order, step_index, curr_order) for curr_order in range(order)]
-        prev_sample = sample + sum(coeff * derivative for coeff, derivative in zip(lms_coeffs, reversed(self.derivatives)))
-        return prev_sample
+def pil_image_to_latent(image):
+    vae = get_vae()
+    torch_device, data_type, device_type = get_model_info(vae)
+    with torch.no_grad():
+        input_latent = tfms.ToTensor()(image).unsqueeze(0).to(device=torch_device,dtype=data_type)*2-1
+        encoded = vae.encode(input_latent)
+        result = 0.18215 * encoded.sample()
+    return result
 
 #-------------------------------------------------------------------------------
 
@@ -172,29 +125,43 @@ def prompts_to_images(prompts,negative_prompt,seed,cfg_scale,steps,width,height,
     unet =get_unet()
     torch_device, data_type, device_type = get_model_info(unet)
     if randgen_device==None: randgen_device = torch_device
-    scheduler = mini_lms()
+
+    num_train_timesteps: int = 1000
+    beta_start: float = 0.00085
+    beta_end: float = 0.012
+    betas = torch.linspace(beta_start**0.5, beta_end**0.5, num_train_timesteps) ** 2
+    alphas = 1.0 - betas
+    alphas_cumprod = torch.cumprod(alphas, dim=0)
+
+    timesteps = torch.linspace(num_train_timesteps-1,0,steps,dtype=torch.int64)
+    alphas_cumprod = alphas_cumprod[timesteps]
+    sigmas = ((1 - alphas_cumprod) / alphas_cumprod) ** 0.5
+    sigmas = torch.concat([sigmas,torch.tensor([0.0])])
+    init_noise_sigma = torch.max(sigmas)
+
     positive_embeddings = text_list_to_embeddings(prompts)
     negative_embeddings = text_list_to_embeddings([negative_prompt]*batch_size)
     text_embeddings = torch.cat([negative_embeddings,positive_embeddings])
     latents = generate_random_latents(seed,width,height,batch_size,torch_device,data_type,generator_device=randgen_device)
-    scheduler.set_timesteps(steps,'cpu')
-    latents = latents * scheduler.init_noise_sigma
+    latents *= init_noise_sigma
+
     clock_stop = perf_counter()
     log.append('prep time : '+str(ceil(clock_stop*1000-clock_start*1000))+' ms')
 
     clock_start = perf_counter()
-    with torch.autocast(device_type=device_type, dtype=data_type):
-        for i, t in enumerate(scheduler.timesteps):
-            #print('step = ',i)
-            latent_model_input = torch.cat([latents] * 2)
-            sigma = scheduler.sigmas[i]
-            latent_model_input = scheduler.scale_model_input(latent_model_input, i)
-            tt = torch.tensor([t]*2*batch_size).to(device=torch_device,dtype=data_type)
+    for step in range(len(timesteps)):
+        timestep = timesteps[step]
+        print('step = ',step,'timestep=',timestep)
+        latent_model_input = torch.cat([latents] * 2)
+        latent_model_input *= alphas_cumprod[step]**0.5
+        tt = torch.tensor([timestep]*2*batch_size).to(device=torch_device,dtype=data_type)
+        with torch.autocast(device_type=device_type, dtype=data_type):
             with torch.no_grad():
                 noise_pred = unet.forward(latent_model_input, timesteps=tt, context = text_embeddings)
-            noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
-            noise_pred = noise_pred_uncond + cfg_scale * (noise_pred_text - noise_pred_uncond)
-            latents = scheduler.step(noise_pred, i, latents)
+        noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
+        noise_pred = noise_pred_uncond + cfg_scale * (noise_pred_text - noise_pred_uncond)
+        latents -= noise_pred*(sigmas[step]-sigmas[step+1])
+
     clock_stop = perf_counter()
     log.append('diffusion time : '+str(ceil(clock_stop*1000-clock_start*1000))+' ms')
 

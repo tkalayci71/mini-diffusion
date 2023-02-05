@@ -1,7 +1,7 @@
 #
 # https://github.com/tkalayci71/mini-diffusion
 #
-# mini_diffusion version 0.21
+# mini_diffusion version 0.3
 #
 
 import torch
@@ -54,7 +54,7 @@ def add_tab():
                     steps = gr.Slider(label='Steps',value=10,minimum=0,maximum=100,step=1)
                     seed = gr.Number(label='Seed',value=0)
                     rand_cpu = gr.Checkbox(label='CPU',value=False)
-                    random_seed = gr.Checkbox(label='Random',value=True)
+                    random_seed = gr.Checkbox(label='Random',value=False)
                 with gr.Row():
                     width = gr.Slider(label='Width',value=512,minimum=320,maximum=768,step=64)
                     height = gr.Slider(label='Height',value=512,minimum=320,maximum=768,step=64)
@@ -63,6 +63,7 @@ def add_tab():
                     generate = gr.Button("Generate",variant='primary')
                 with gr.Row():
                     result_text = gr.Textbox(show_label=False,interactive=False,lines=4)
+
 
             with gr.Column(scale=1):
                 result_image = gr.HTML(show_label=False,interactive=False)
