@@ -9,3 +9,6 @@ https://nbviewer.org/github/fastai/diffusion-nbs/blob/master/Stable%20Diffusion%
 https://www.youtube.com/watch?v=0_BBRNYInx8
 
 inside webui environment, without having to install anything else. This works only for SD1.x.
+
+
+version 0.3 - removed lms scheduler, simplified version now gives results same as euler
