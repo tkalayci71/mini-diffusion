@@ -1,7 +1,7 @@
 #
 # https://github.com/tkalayci71/mini-diffusion
 #
-# mini_diffusion_utils version 0.3
+# mini_diffusion_utils version 0.4
 #
 
 from modules import shared
@@ -134,16 +134,18 @@ def prompts_to_images(prompts,negative_prompt,seed,cfg_scale,steps,width,height,
     alphas_cumprod = torch.cumprod(alphas, dim=0)
 
     timesteps = torch.linspace(num_train_timesteps-1,0,steps,dtype=torch.int64)
+
     alphas_cumprod = alphas_cumprod[timesteps]
-    sigmas = ((1 - alphas_cumprod) / alphas_cumprod) ** 0.5
-    sigmas = torch.concat([sigmas,torch.tensor([0.0])])
-    init_noise_sigma = torch.max(sigmas)
+    image_weights = alphas_cumprod **0.5
+    noise_weights = (1-alphas_cumprod) **0.5
+    image_weights = torch.concat([image_weights,torch.tensor([1.0])])
+    noise_weights = torch.concat([noise_weights,torch.tensor([0.0])])
 
     positive_embeddings = text_list_to_embeddings(prompts)
     negative_embeddings = text_list_to_embeddings([negative_prompt]*batch_size)
     text_embeddings = torch.cat([negative_embeddings,positive_embeddings])
     latents = generate_random_latents(seed,width,height,batch_size,torch_device,data_type,generator_device=randgen_device)
-    latents *= init_noise_sigma
+    latents *= noise_weights[0]
 
     clock_stop = perf_counter()
     log.append('prep time : '+str(ceil(clock_stop*1000-clock_start*1000))+' ms')
@@ -153,14 +155,14 @@ def prompts_to_images(prompts,negative_prompt,seed,cfg_scale,steps,width,height,
         timestep = timesteps[step]
         print('step = ',step,'timestep=',timestep)
         latent_model_input = torch.cat([latents] * 2)
-        latent_model_input *= alphas_cumprod[step]**0.5
         tt = torch.tensor([timestep]*2*batch_size).to(device=torch_device,dtype=data_type)
         with torch.autocast(device_type=device_type, dtype=data_type):
             with torch.no_grad():
                 noise_pred = unet.forward(latent_model_input, timesteps=tt, context = text_embeddings)
         noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
         noise_pred = noise_pred_uncond + cfg_scale * (noise_pred_text - noise_pred_uncond)
-        latents -= noise_pred*(sigmas[step]-sigmas[step+1])
+        latents = (latents - noise_pred*noise_weights[step])/image_weights[step]
+        latents = latents*image_weights[step+1] + noise_pred*noise_weights[step+1]
 
     clock_stop = perf_counter()
     log.append('diffusion time : '+str(ceil(clock_stop*1000-clock_start*1000))+' ms')
