@@ -1,7 +1,7 @@
 #
 # https://github.com/tkalayci71/mini-diffusion
 #
-# mini_diffusion_utils version 0.4
+# mini_diffusion_utils version 0.5
 #
 
 from modules import shared
@@ -9,9 +9,6 @@ import torch
 import numpy as np
 from scipy import integrate
 from PIL import Image
-from time import perf_counter
-from math import ceil
-from torchvision import transforms as tfms
 
 #-------------------------------------------------------------------------------
 
@@ -108,20 +105,24 @@ def pil_image_to_latent(image):
         result = 0.18215 * encoded.sample()
     return result
 
+def tensor_image_to_latent(tensor):
+    vae = get_vae()
+    torch_device, data_type, device_type = get_model_info(vae)
+    with torch.no_grad():
+        input_latent = tensor.unsqueeze(0).to(device=torch_device,dtype=data_type)*2-1
+        encoded = vae.encode(input_latent)
+        result = 0.18215 * encoded.sample()
+    return result
+
 #-------------------------------------------------------------------------------
 
-def prompts_to_images(prompts,negative_prompt,seed,cfg_scale,steps,width,height,randgen_device=None):
+def prompts_to_images(prompts,negative_prompt,seed,cfg_scale,steps,width,height,randgen_device=None,image=None,denoising=1.0,brightness=1.0):
 
     sd_version = get_sd_version()
     if (sd_version!=1): return None, 'Error: SD1 only'
 
     batch_size = len(prompts)
 
-    log = []
-
-    total_clock_start = perf_counter()
-
-    clock_start = perf_counter()
     unet =get_unet()
     torch_device, data_type, device_type = get_model_info(unet)
     if randgen_device==None: randgen_device = torch_device
@@ -134,24 +135,30 @@ def prompts_to_images(prompts,negative_prompt,seed,cfg_scale,steps,width,height,
     alphas_cumprod = torch.cumprod(alphas, dim=0)
 
     timesteps = torch.linspace(num_train_timesteps-1,0,steps,dtype=torch.int64)
-
     alphas_cumprod = alphas_cumprod[timesteps]
     image_weights = alphas_cumprod **0.5
     noise_weights = (1-alphas_cumprod) **0.5
     image_weights = torch.concat([image_weights,torch.tensor([1.0])])
     noise_weights = torch.concat([noise_weights,torch.tensor([0.0])])
+    start_step = 0
 
     positive_embeddings = text_list_to_embeddings(prompts)
     negative_embeddings = text_list_to_embeddings([negative_prompt]*batch_size)
     text_embeddings = torch.cat([negative_embeddings,positive_embeddings])
-    latents = generate_random_latents(seed,width,height,batch_size,torch_device,data_type,generator_device=randgen_device)
-    latents *= noise_weights[0]
+    noise_latent = generate_random_latents(seed,width,height,batch_size,torch_device,data_type,generator_device=randgen_device)
 
-    clock_stop = perf_counter()
-    log.append('prep time : '+str(ceil(clock_stop*1000-clock_start*1000))+' ms')
+    if image!=None:
+        start_step = int(steps*(1.0-denoising))
+        resized_image = image.resize((width,height))
+        tensor_image = tfms.ToTensor()(resized_image) * brightness
+        image_latent = tensor_image_to_latent(tensor_image)
+        latents = noise_latent*noise_weights[start_step] + image_latent*image_weights[start_step]
+    else:
+        latents = noise_latent*noise_weights[start_step]
 
-    clock_start = perf_counter()
+    print('--- mini diffusion ---')
     for step in range(len(timesteps)):
+        if step<start_step:continue
         timestep = timesteps[step]
         print('step = ',step,'timestep=',timestep)
         latent_model_input = torch.cat([latents] * 2)
@@ -164,18 +171,7 @@ def prompts_to_images(prompts,negative_prompt,seed,cfg_scale,steps,width,height,
         latents = (latents - noise_pred*noise_weights[step])/image_weights[step]
         latents = latents*image_weights[step+1] + noise_pred*noise_weights[step+1]
 
-    clock_stop = perf_counter()
-    log.append('diffusion time : '+str(ceil(clock_stop*1000-clock_start*1000))+' ms')
-
-    clock_start = perf_counter()
     result_images = latents_to_pil_image(latents)
-    clock_stop = perf_counter()
-    log.append('vae decode time: '+str(ceil(clock_stop*1000-clock_start*1000))+' ms')
-
-    total_clock_stop = perf_counter()
-    log.append('total time : '+str(ceil(total_clock_stop*1000-total_clock_start*1000))+' ms')
-
-    result_text = '\n'.join(log)
-    return result_images, result_text
+    return result_images
 
 #-------------------------------------------------------------------------------
