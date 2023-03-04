@@ -9,6 +9,7 @@ import torch
 import numpy as np
 from scipy import integrate
 from PIL import Image
+from torchvision import transforms as tfms
 
 #-------------------------------------------------------------------------------
 
